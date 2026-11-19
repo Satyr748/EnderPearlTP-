@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "enderpearltp",
+  "version": "${version}",
+  "name": "EnderPearlTP",
+  "description": "Server-side player selection and Fishing Rod teleport tool.",
+  "environment": "server",
+  "entrypoints": {
+    "main": ["de.server.enderpearltp.EnderPearlTP"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
