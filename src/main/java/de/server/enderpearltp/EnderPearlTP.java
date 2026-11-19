@@ -1,12 +1,15 @@
+
 package de.server.enderpearltp;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.command.permission.LeveledPermissionPredicate;
 import net.minecraft.command.permission.PermissionLevel;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.particle.ParticleTypes;
@@ -19,7 +22,10 @@ import net.minecraft.text.ClickEvent;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -37,6 +43,11 @@ public class EnderPearlTP implements ModInitializer {
     private static final Set<UUID> ARMED_RODS =
             ConcurrentHashMap.newKeySet();
 
+    private static final List<PendingTeleport> PENDING_TELEPORTS =
+            new ArrayList<>();
+
+    private static final int TELEPORT_DELAY_TICKS = 60;
+
     private static boolean isAllowed(ServerCommandSource source) {
         return source.getPlayer() != null
                 && source.getPermissions()
@@ -50,7 +61,6 @@ public class EnderPearlTP implements ModInitializer {
         CommandRegistrationCallback.EVENT.register(
                 (dispatcher, registryAccess, environment) -> {
 
-                    // /enderpearl öffnet die Spielerauswahl.
                     dispatcher.register(
                             CommandManager.literal("enderpearl")
                                     .requires(EnderPearlTP::isAllowed)
@@ -64,6 +74,7 @@ public class EnderPearlTP implements ModInitializer {
                                                             "team",
                                                             StringArgumentType.word())
                                                     .executes(context -> {
+
                                                         ServerPlayerEntity player =
                                                                 context.getSource().getPlayerOrThrow();
 
@@ -73,15 +84,10 @@ public class EnderPearlTP implements ModInitializer {
                                                         SELECTED_VEXBOT_TEAMS.put(
                                                                 player.getUuid(), team);
 
-                                                        player.sendMessage(
-                                                                Text.literal("§aVexBot-Team ausgewählt: §e" + team),
-                                                                false);
-
                                                         return Command.SINGLE_SUCCESS;
                                                     })))
                     );
 
-                    // /eptoggle <spieler>
                     dispatcher.register(
                             CommandManager.literal("eptoggle")
                                     .requires(EnderPearlTP::isAllowed)
@@ -98,9 +104,6 @@ public class EnderPearlTP implements ModInitializer {
                                                                 .getPlayer(context, "player");
 
                                                 if (owner.equals(target)) {
-                                                    owner.sendMessage(
-                                                            Text.literal("§cDu kannst dich nicht selbst auswählen."),
-                                                            false);
                                                     return 0;
                                                 }
 
@@ -113,19 +116,10 @@ public class EnderPearlTP implements ModInitializer {
                                                     selected.remove(target.getUuid());
                                                 }
 
-                                                owner.sendMessage(
-                                                        Text.literal(
-                                                                (selected.contains(target.getUuid())
-                                                                        ? "§aAusgewählt: "
-                                                                        : "§cAbgewählt: ")
-                                                                        + target.getName().getString()),
-                                                        false);
-
                                                 return Command.SINGLE_SUCCESS;
                                             }))
                     );
 
-                    // /epconfirm
                     dispatcher.register(
                             CommandManager.literal("epconfirm")
                                     .requires(EnderPearlTP::isAllowed)
@@ -136,7 +130,6 @@ public class EnderPearlTP implements ModInitializer {
                     );
                 });
 
-        // Rechtsklick mit der vorbereiteten Angel.
         UseItemCallback.EVENT.register((player, world, hand) -> {
 
             if (!(player instanceof ServerPlayerEntity serverPlayer)) {
@@ -158,10 +151,15 @@ public class EnderPearlTP implements ModInitializer {
             serverPlayer.setStackInHand(hand, ItemStack.EMPTY);
             ARMED_RODS.remove(serverPlayer.getUuid());
 
-            teleportSelected(serverPlayer);
+            scheduleTeleport(serverPlayer);
 
             return ActionResult.SUCCESS;
         });
+
+        // Wartet die 3 Sekunden ab und führt danach den Teleport aus.
+        ServerTickEvents.END_SERVER_TICK.register(
+                EnderPearlTP::tickPendingTeleports
+        );
     }
 
     private static ServerWorld getServerWorld(ServerPlayerEntity player) {
@@ -179,10 +177,7 @@ public class EnderPearlTP implements ModInitializer {
                         player.getUuid(),
                         key -> ConcurrentHashMap.newKeySet());
 
-        player.sendMessage(
-                Text.literal("§6§lEnderPearlTP §7- Spieler auswählen"),
-                false);
-
+        // Die anklickbare Spielerliste bleibt erhalten.
         for (ServerPlayerEntity target :
                 getServer(player).getPlayerManager().getPlayerList()) {
 
@@ -203,14 +198,6 @@ public class EnderPearlTP implements ModInitializer {
 
             player.sendMessage(clickable, false);
         }
-
-        player.sendMessage(
-                Text.literal("§eVexBot-Team auswählen: §f/enderpearl team <Teamname>"),
-                false);
-
-        player.sendMessage(
-                Text.literal("§aFertig? Benutze /epconfirm."),
-                false);
     }
 
     private static void giveRod(ServerPlayerEntity player) {
@@ -221,9 +208,6 @@ public class EnderPearlTP implements ModInitializer {
         String team = SELECTED_VEXBOT_TEAMS.get(player.getUuid());
 
         if (selected.isEmpty() && (team == null || team.isBlank())) {
-            player.sendMessage(
-                    Text.literal("§cWähle zuerst Spieler oder ein VexBot-Team aus."),
-                    false);
             return;
         }
 
@@ -234,13 +218,9 @@ public class EnderPearlTP implements ModInitializer {
         }
 
         ARMED_RODS.add(player.getUuid());
-
-        player.sendMessage(
-                Text.literal("§aFishing Rod erhalten! Rechtsklick zum Teleportieren."),
-                false);
     }
 
-    private static void teleportSelected(ServerPlayerEntity owner) {
+    private static void scheduleTeleport(ServerPlayerEntity owner) {
 
         Set<UUID> selected =
                 SELECTIONS.getOrDefault(owner.getUuid(), Set.of());
@@ -248,9 +228,6 @@ public class EnderPearlTP implements ModInitializer {
         String team = SELECTED_VEXBOT_TEAMS.get(owner.getUuid());
 
         if (selected.isEmpty() && (team == null || team.isBlank())) {
-            owner.sendMessage(
-                    Text.literal("§cKeine Spieler oder kein VexBot-Team ausgewählt."),
-                    false);
             return;
         }
 
@@ -263,7 +240,85 @@ public class EnderPearlTP implements ModInitializer {
         float yaw = owner.getYaw();
         float pitch = owner.getPitch();
 
-        // Partikelkreis
+        List<ItemEntity> fallingPearls = new ArrayList<>();
+
+        // Sichtbare Enderperlen von oben herunterfallen lassen.
+        for (int i = 0; i < 12; i++) {
+
+            double angle = (Math.PI * 2.0 * i) / 12.0;
+
+            double pearlX = x + Math.cos(angle) * 2.0;
+            double pearlZ = z + Math.sin(angle) * 2.0;
+
+            ItemEntity pearl = new ItemEntity(
+                    destinationWorld,
+                    pearlX,
+                    y + 8.0,
+                    pearlZ,
+                    new ItemStack(Items.ENDER_PEARL)
+            );
+
+            pearl.setNoGravity(true);
+            pearl.setPickupDelay(32767);
+            pearl.setVelocity(0.0, -0.13, 0.0);
+
+            destinationWorld.spawnEntity(pearl);
+            fallingPearls.add(pearl);
+        }
+
+        PENDING_TELEPORTS.add(
+                new PendingTeleport(
+                        owner.getUuid(),
+                        destinationWorld,
+                        x, y, z,
+                        yaw, pitch,
+                        new HashSet<>(selected),
+                        team,
+                        fallingPearls
+                )
+        );
+    }
+
+    private static void tickPendingTeleports(MinecraftServer server) {
+
+        Iterator<PendingTeleport> iterator =
+                PENDING_TELEPORTS.iterator();
+
+        while (iterator.hasNext()) {
+
+            PendingTeleport pending = iterator.next();
+
+            pending.ticksRemaining--;
+
+            if (pending.ticksRemaining <= 0) {
+
+                // Die sichtbaren Enderperlen entfernen.
+                for (ItemEntity pearl : pending.fallingPearls) {
+                    pearl.discard();
+                }
+
+                executeTeleport(server, pending);
+
+                iterator.remove();
+            }
+        }
+    }
+
+    private static void executeTeleport(
+            MinecraftServer server,
+            PendingTeleport pending
+    ) {
+
+        ServerWorld destinationWorld = pending.destinationWorld;
+
+        double x = pending.x;
+        double y = pending.y;
+        double z = pending.z;
+
+        float yaw = pending.yaw;
+        float pitch = pending.pitch;
+
+        // Portal-Partikelkreis erscheint erst beim Teleport.
         for (int i = 0; i < 24; i++) {
 
             double angle = (Math.PI * 2.0 * i) / 24.0;
@@ -280,16 +335,13 @@ public class EnderPearlTP implements ModInitializer {
             );
         }
 
-        int moved = 0;
-        MinecraftServer server = getServer(owner);
-
         // Ausgewählte Online-Spieler teleportieren.
-        for (UUID id : new HashSet<>(selected)) {
+        for (UUID id : pending.selectedPlayers) {
 
             ServerPlayerEntity target =
                     server.getPlayerManager().getPlayer(id);
 
-            if (target != null && target != owner) {
+            if (target != null) {
 
                 target.teleport(
                         destinationWorld,
@@ -299,52 +351,76 @@ public class EnderPearlTP implements ModInitializer {
                         pitch,
                         true
                 );
-
-                target.sendMessage(
-                        Text.literal("§dDu wurdest zu "
-                                + owner.getName().getString()
-                                + " teleportiert."),
-                        false
-                );
-
-                moved++;
             }
         }
 
         // VexBot-Team teleportieren.
-        if (team != null && !team.isBlank()) {
+        if (pending.team != null && !pending.team.isBlank()) {
 
-            String command = "vexbot team " + team + " tp "
-                    + String.format(Locale.ROOT, "%.3f %.3f %.3f", x, y, z);
+            ServerPlayerEntity owner =
+                    server.getPlayerManager().getPlayer(pending.ownerId);
 
-            try {
-                server.getCommandManager().parseAndExecute(
-                        owner.getCommandSource(),
-                        command
-                );
+            if (owner != null) {
 
-                owner.sendMessage(
-                        Text.literal("§aVexBot-Team-Befehl für §e" + team
-                                + " §awurde ausgeführt."),
-                        false
-                );
+                String command = "vexbot team " + pending.team + " tp "
+                        + String.format(Locale.ROOT, "%.3f %.3f %.3f", x, y, z);
 
-            } catch (Exception exception) {
-                owner.sendMessage(
-                        Text.literal("§cFehler beim VexBot-Team-Teleport: "
-                                + exception.getMessage()),
-                        false
-                );
+                try {
+                    server.getCommandManager().parseAndExecute(
+                            owner.getCommandSource(),
+                            command
+                    );
+                } catch (Exception ignored) {
+                    // Keine Chat-Fehlermeldung ausgeben.
+                }
             }
         }
 
-        owner.sendMessage(
-                Text.literal("§a" + moved + " ausgewählte Spieler teleportiert."),
-                false
-        );
+        SELECTIONS.remove(pending.ownerId);
+        SELECTED_VEXBOT_TEAMS.remove(pending.ownerId);
+        ARMED_RODS.remove(pending.ownerId);
+    }
 
-        ARMED_RODS.remove(owner.getUuid());
-        SELECTIONS.remove(owner.getUuid());
-        SELECTED_VEXBOT_TEAMS.remove(owner.getUuid());
+    private static class PendingTeleport {
+
+        private final UUID ownerId;
+        private final ServerWorld destinationWorld;
+
+        private final double x;
+        private final double y;
+        private final double z;
+
+        private final float yaw;
+        private final float pitch;
+
+        private final Set<UUID> selectedPlayers;
+        private final String team;
+        private final List<ItemEntity> fallingPearls;
+
+        private int ticksRemaining = TELEPORT_DELAY_TICKS;
+
+        private PendingTeleport(
+                UUID ownerId,
+                ServerWorld destinationWorld,
+                double x,
+                double y,
+                double z,
+                float yaw,
+                float pitch,
+                Set<UUID> selectedPlayers,
+                String team,
+                List<ItemEntity> fallingPearls
+        ) {
+            this.ownerId = ownerId;
+            this.destinationWorld = destinationWorld;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.yaw = yaw;
+            this.pitch = pitch;
+            this.selectedPlayers = selectedPlayers;
+            this.team = team;
+            this.fallingPearls = fallingPearls;
+        }
     }
 }
