@@ -50,6 +50,7 @@ public class EnderPearlTP implements ModInitializer {
         CommandRegistrationCallback.EVENT.register(
                 (dispatcher, registryAccess, environment) -> {
 
+                    // /enderpearl öffnet die Spielerauswahl.
                     dispatcher.register(
                             CommandManager.literal("enderpearl")
                                     .requires(EnderPearlTP::isAllowed)
@@ -80,6 +81,7 @@ public class EnderPearlTP implements ModInitializer {
                                                     })))
                     );
 
+                    // /eptoggle <spieler>
                     dispatcher.register(
                             CommandManager.literal("eptoggle")
                                     .requires(EnderPearlTP::isAllowed)
@@ -123,6 +125,7 @@ public class EnderPearlTP implements ModInitializer {
                                             }))
                     );
 
+                    // /epconfirm
                     dispatcher.register(
                             CommandManager.literal("epconfirm")
                                     .requires(EnderPearlTP::isAllowed)
@@ -133,6 +136,7 @@ public class EnderPearlTP implements ModInitializer {
                     );
                 });
 
+        // Rechtsklick mit der vorbereiteten Angel.
         UseItemCallback.EVENT.register((player, world, hand) -> {
 
             if (!(player instanceof ServerPlayerEntity serverPlayer)) {
@@ -150,6 +154,7 @@ public class EnderPearlTP implements ModInitializer {
                 return ActionResult.PASS;
             }
 
+            // Angel entfernen, auch im Creative-Modus.
             serverPlayer.setStackInHand(hand, ItemStack.EMPTY);
             ARMED_RODS.remove(serverPlayer.getUuid());
 
@@ -160,7 +165,7 @@ public class EnderPearlTP implements ModInitializer {
     }
 
     private static ServerWorld getServerWorld(ServerPlayerEntity player) {
-        return (ServerWorld) player.getEntityWorld();
+        return player.getEntityWorld();
     }
 
     private static MinecraftServer getServer(ServerPlayerEntity player) {
@@ -258,7 +263,9 @@ public class EnderPearlTP implements ModInitializer {
         float yaw = owner.getYaw();
         float pitch = owner.getPitch();
 
+        // Partikelkreis
         for (int i = 0; i < 24; i++) {
+
             double angle = (Math.PI * 2.0 * i) / 24.0;
 
             double px = x + Math.cos(angle) * 2.0;
@@ -276,6 +283,7 @@ public class EnderPearlTP implements ModInitializer {
         int moved = 0;
         MinecraftServer server = getServer(owner);
 
+        // Ausgewählte Online-Spieler teleportieren.
         for (UUID id : new HashSet<>(selected)) {
 
             ServerPlayerEntity target =
@@ -303,26 +311,30 @@ public class EnderPearlTP implements ModInitializer {
             }
         }
 
+        // VexBot-Team teleportieren.
         if (team != null && !team.isBlank()) {
 
             String command = "vexbot team " + team + " tp "
                     + String.format(Locale.ROOT, "%.3f %.3f %.3f", x, y, z);
 
             try {
-                server.getCommandManager().executeWithPrefix(
+                server.getCommandManager().parseAndExecute(
                         owner.getCommandSource(),
-                        command);
+                        command
+                );
 
                 owner.sendMessage(
                         Text.literal("§aVexBot-Team-Befehl für §e" + team
                                 + " §awurde ausgeführt."),
-                        false);
+                        false
+                );
 
             } catch (Exception exception) {
                 owner.sendMessage(
                         Text.literal("§cFehler beim VexBot-Team-Teleport: "
                                 + exception.getMessage()),
-                        false);
+                        false
+                );
             }
         }
 
