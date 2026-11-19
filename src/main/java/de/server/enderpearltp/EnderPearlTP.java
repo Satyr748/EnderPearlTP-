@@ -46,7 +46,8 @@ public class EnderPearlTP implements ModInitializer {
     private static final List<PendingTeleport> PENDING_TELEPORTS =
             new ArrayList<>();
 
-    private static final int TELEPORT_DELAY_TICKS = 60;
+    // 30 Ticks = ungefähr 1,5 Sekunden.
+    private static final int TELEPORT_DELAY_TICKS = 30;
 
     private static boolean isAllowed(ServerCommandSource source) {
         return source.getPlayer() != null
@@ -156,7 +157,6 @@ public class EnderPearlTP implements ModInitializer {
             return ActionResult.SUCCESS;
         });
 
-        // Wartet die 3 Sekunden ab und führt danach den Teleport aus.
         ServerTickEvents.END_SERVER_TICK.register(
                 EnderPearlTP::tickPendingTeleports
         );
@@ -177,7 +177,6 @@ public class EnderPearlTP implements ModInitializer {
                         player.getUuid(),
                         key -> ConcurrentHashMap.newKeySet());
 
-        // Die anklickbare Spielerliste bleibt erhalten.
         for (ServerPlayerEntity target :
                 getServer(player).getPlayerManager().getPlayerList()) {
 
@@ -242,25 +241,30 @@ public class EnderPearlTP implements ModInitializer {
 
         List<ItemEntity> fallingPearls = new ArrayList<>();
 
-        // Sichtbare Enderperlen von oben herunterfallen lassen.
+        // Enderperlen kommen von weit oben und fliegen schräg nach unten.
         for (int i = 0; i < 12; i++) {
 
             double angle = (Math.PI * 2.0 * i) / 12.0;
 
-            double pearlX = x + Math.cos(angle) * 2.0;
-            double pearlZ = z + Math.sin(angle) * 2.0;
+            double pearlX = x + Math.cos(angle) * 3.0;
+            double pearlZ = z + Math.sin(angle) * 3.0;
 
             ItemEntity pearl = new ItemEntity(
                     destinationWorld,
                     pearlX,
-                    y + 8.0,
+                    y + 20.0,
                     pearlZ,
                     new ItemStack(Items.ENDER_PEARL)
             );
 
-            pearl.setNoGravity(true);
+            pearl.setNoGravity(false);
             pearl.setPickupDelay(32767);
-            pearl.setVelocity(0.0, -0.13, 0.0);
+
+            pearl.setVelocity(
+                    -Math.cos(angle) * 0.08,
+                    -0.45,
+                    -Math.sin(angle) * 0.08
+            );
 
             destinationWorld.spawnEntity(pearl);
             fallingPearls.add(pearl);
@@ -292,7 +296,7 @@ public class EnderPearlTP implements ModInitializer {
 
             if (pending.ticksRemaining <= 0) {
 
-                // Die sichtbaren Enderperlen entfernen.
+                // Sichtbare Enderperlen entfernen.
                 for (ItemEntity pearl : pending.fallingPearls) {
                     pearl.discard();
                 }
@@ -318,7 +322,7 @@ public class EnderPearlTP implements ModInitializer {
         float yaw = pending.yaw;
         float pitch = pending.pitch;
 
-        // Portal-Partikelkreis erscheint erst beim Teleport.
+        // Portal-Partikelkreis.
         for (int i = 0; i < 24; i++) {
 
             double angle = (Math.PI * 2.0 * i) / 24.0;
@@ -335,7 +339,7 @@ public class EnderPearlTP implements ModInitializer {
             );
         }
 
-        // Ausgewählte Online-Spieler teleportieren.
+        // Ausgewählte Spieler teleportieren.
         for (UUID id : pending.selectedPlayers) {
 
             ServerPlayerEntity target =
