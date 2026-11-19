@@ -10,6 +10,7 @@ import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -33,8 +34,10 @@ public class EnderPearlTP implements ModInitializer {
 
     private static boolean isAllowed(ServerCommandSource source) {
         return source.getPlayer() != null
-                && source.getPermissions() instanceof LeveledPermissionPredicate permissions
-                && permissions.getLevel().isAtLeast(PermissionLevel.GAMEMASTERS);
+                && source.getPermissions()
+                instanceof LeveledPermissionPredicate permissions
+                && permissions.getLevel()
+                .isAtLeast(PermissionLevel.GAMEMASTERS);
     }
 
     @Override
@@ -43,68 +46,80 @@ public class EnderPearlTP implements ModInitializer {
         CommandRegistrationCallback.EVENT.register(
                 (dispatcher, registryAccess, environment) -> {
 
-                    dispatcher.register(CommandManager.literal("enderpearl")
-                            .requires(EnderPearlTP::isAllowed)
-                            .executes(context -> {
-                                openSelectionChat(
-                                        context.getSource().getPlayerOrThrow());
-                                return Command.SINGLE_SUCCESS;
-                            }));
-
-                    dispatcher.register(CommandManager.literal("enderpearltp")
-                            .requires(EnderPearlTP::isAllowed)
-                            .executes(context -> {
-                                giveRod(context.getSource().getPlayerOrThrow());
-                                return Command.SINGLE_SUCCESS;
-                            }));
-
-                    dispatcher.register(CommandManager.literal("eptoggle")
-                            .requires(EnderPearlTP::isAllowed)
-                            .then(CommandManager.argument(
-                                            "player",
-                                            net.minecraft.command.argument.EntityArgumentType.player())
+                    dispatcher.register(
+                            CommandManager.literal("enderpearl")
+                                    .requires(EnderPearlTP::isAllowed)
                                     .executes(context -> {
-
-                                        ServerPlayerEntity owner =
-                                                context.getSource().getPlayerOrThrow();
-
-                                        ServerPlayerEntity target =
-                                                net.minecraft.command.argument.EntityArgumentType
-                                                        .getPlayer(context, "player");
-
-                                        if (owner.equals(target)) {
-                                            owner.sendMessage(
-                                                    Text.literal("§cDu kannst dich nicht selbst auswählen."),
-                                                    false);
-                                            return 0;
-                                        }
-
-                                        Set<UUID> selected =
-                                                SELECTIONS.computeIfAbsent(
-                                                        owner.getUuid(),
-                                                        key -> ConcurrentHashMap.newKeySet());
-
-                                        if (!selected.add(target.getUuid())) {
-                                            selected.remove(target.getUuid());
-                                        }
-
-                                        owner.sendMessage(
-                                                Text.literal(
-                                                        (selected.contains(target.getUuid())
-                                                                ? "§aAusgewählt: "
-                                                                : "§cAbgewählt: ")
-                                                                + target.getName().getString()),
-                                                false);
-
+                                        openSelectionChat(
+                                                context.getSource()
+                                                        .getPlayerOrThrow());
                                         return Command.SINGLE_SUCCESS;
-                                    })));
+                                    })
+                    );
 
-                    dispatcher.register(CommandManager.literal("epconfirm")
-                            .requires(EnderPearlTP::isAllowed)
-                            .executes(context -> {
-                                giveRod(context.getSource().getPlayerOrThrow());
-                                return Command.SINGLE_SUCCESS;
-                            }));
+                    dispatcher.register(
+                            CommandManager.literal("enderpearltp")
+                                    .requires(EnderPearlTP::isAllowed)
+                                    .executes(context -> {
+                                        giveRod(context.getSource()
+                                                .getPlayerOrThrow());
+                                        return Command.SINGLE_SUCCESS;
+                                    })
+                    );
+
+                    dispatcher.register(
+                            CommandManager.literal("eptoggle")
+                                    .requires(EnderPearlTP::isAllowed)
+                                    .then(CommandManager.argument(
+                                                    "player",
+                                                    net.minecraft.command.argument.EntityArgumentType.player())
+                                            .executes(context -> {
+
+                                                ServerPlayerEntity owner =
+                                                        context.getSource()
+                                                                .getPlayerOrThrow();
+
+                                                ServerPlayerEntity target =
+                                                        net.minecraft.command.argument.EntityArgumentType
+                                                                .getPlayer(context, "player");
+
+                                                if (owner.equals(target)) {
+                                                    owner.sendMessage(
+                                                            Text.literal("§cDu kannst dich nicht selbst auswählen."),
+                                                            false);
+                                                    return 0;
+                                                }
+
+                                                Set<UUID> selected =
+                                                        SELECTIONS.computeIfAbsent(
+                                                                owner.getUuid(),
+                                                                key -> ConcurrentHashMap.newKeySet());
+
+                                                if (!selected.add(target.getUuid())) {
+                                                    selected.remove(target.getUuid());
+                                                }
+
+                                                owner.sendMessage(
+                                                        Text.literal(
+                                                                (selected.contains(target.getUuid())
+                                                                        ? "§aAusgewählt: "
+                                                                        : "§cAbgewählt: ")
+                                                                        + target.getName().getString()),
+                                                        false);
+
+                                                return Command.SINGLE_SUCCESS;
+                                            }))
+                    );
+
+                    dispatcher.register(
+                            CommandManager.literal("epconfirm")
+                                    .requires(EnderPearlTP::isAllowed)
+                                    .executes(context -> {
+                                        giveRod(context.getSource()
+                                                .getPlayerOrThrow());
+                                        return Command.SINGLE_SUCCESS;
+                                    })
+                    );
                 });
 
         UseItemCallback.EVENT.register((player, world, hand) -> {
@@ -131,6 +146,14 @@ public class EnderPearlTP implements ModInitializer {
         });
     }
 
+    private static ServerWorld getServerWorld(ServerPlayerEntity player) {
+        return (ServerWorld) player.getEntityWorld();
+    }
+
+    private static MinecraftServer getServer(ServerPlayerEntity player) {
+        return getServerWorld(player).getServer();
+    }
+
     private static void openSelectionChat(ServerPlayerEntity player) {
 
         Set<UUID> selected =
@@ -143,7 +166,7 @@ public class EnderPearlTP implements ModInitializer {
                 false);
 
         for (ServerPlayerEntity target :
-                player.getServer().getPlayerManager().getPlayerList()) {
+                getServer(player).getPlayerManager().getPlayerList()) {
 
             if (!target.getUuid().equals(player.getUuid())) {
 
@@ -186,7 +209,7 @@ public class EnderPearlTP implements ModInitializer {
         ARMED_RODS.add(player.getUuid());
 
         player.sendMessage(
-                Text.literal("§aNormale Fishing Rod erhalten! Rechtsklick zum Aktivieren."),
+                Text.literal("§aFishing Rod erhalten! Rechtsklick zum Aktivieren."),
                 false);
     }
 
@@ -202,7 +225,7 @@ public class EnderPearlTP implements ModInitializer {
             return;
         }
 
-        ServerWorld destinationWorld = owner.getServerWorld();
+        ServerWorld destinationWorld = getServerWorld(owner);
 
         double x = owner.getX();
         double y = owner.getY();
@@ -224,15 +247,18 @@ public class EnderPearlTP implements ModInitializer {
                     px, y + 1.0, pz,
                     8,
                     0.12, 0.35, 0.12,
-                    0.02);
+                    0.02
+            );
         }
 
         int moved = 0;
 
+        MinecraftServer server = getServer(owner);
+
         for (UUID id : new HashSet<>(selected)) {
 
             ServerPlayerEntity target =
-                    owner.getServer().getPlayerManager().getPlayer(id);
+                    server.getPlayerManager().getPlayer(id);
 
             if (target != null && target != owner) {
 
@@ -242,13 +268,15 @@ public class EnderPearlTP implements ModInitializer {
                         Set.of(),
                         yaw,
                         pitch,
-                        true);
+                        true
+                );
 
                 target.sendMessage(
                         Text.literal("§dDu wurdest zu "
                                 + owner.getName().getString()
                                 + " teleportiert."),
-                        false);
+                        false
+                );
 
                 moved++;
             }
@@ -256,7 +284,8 @@ public class EnderPearlTP implements ModInitializer {
 
         owner.sendMessage(
                 Text.literal("§a" + moved + " Spieler teleportiert."),
-                false);
+                false
+        );
 
         ARMED_RODS.remove(owner.getUuid());
         SELECTIONS.remove(owner.getUuid());
