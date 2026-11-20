@@ -1,4 +1,3 @@
-
 package de.server.enderpearltp;
 
 import com.mojang.brigadier.Command;
@@ -21,6 +20,8 @@ import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
@@ -134,3 +135,341 @@ public class EnderPearlTP implements ModInitializer {
                 });
 
         UseItemCallback.EVENT.register((player, world, hand) -> {
+
+            if (!(player instanceof ServerPlayerEntity serverPlayer)) {
+                return ActionResult.PASS;
+            }
+
+            if (world.isClient()) {
+                return ActionResult.PASS;
+            }
+
+            ItemStack stack = serverPlayer.getStackInHand(hand);
+
+            // Nur die markierte Spezial-Angel darf den Teleport auslösen.
+            if (!isSpecialRod(stack)) {
+                return ActionResult.PASS;
+            }
+
+            /*
+             * Wenn noch kein Haken existiert, lassen wir Minecraft die Angel
+             * ganz normal auswerfen. Erst beim nächsten Rechtsklick, wenn der
+             * Haken draußen ist, fangen wir das Einziehen ab.
+             */
+            if (serverPlayer.fishHook == null) {
+                return ActionResult.PASS;
+            }
+
+            // Haken entfernen und die Spezial-Angel beim Einziehen zerbrechen.
+            serverPlayer.fishHook.discard();
+            serverPlayer.setStackInHand(hand, ItemStack.EMPTY);
+
+            // Normaler Minecraft-Sound für ein zerbrechendes Item.
+            getServerWorld(serverPlayer).playSound(
+                    null,
+                    serverPlayer.getX(),
+                    serverPlayer.getY(),
+                    serverPlayer.getZ(),
+                    SoundEvents.ENTITY_ITEM_BREAK,
+                    SoundCategory.PLAYERS,
+                    1.0F,
+                    1.0F
+            );
+
+            scheduleTeleport(serverPlayer);
+
+            return ActionResult.SUCCESS;
+        });
+
+        ServerTickEvents.END_SERVER_TICK.register(
+                EnderPearlTP::tickPendingTeleports
+        );
+    }
+
+    private static boolean isSpecialRod(ItemStack stack) {
+        if (!stack.isOf(Items.FISHING_ROD)) {
+            return false;
+        }
+
+        NbtComponent customData = stack.get(DataComponentTypes.CUSTOM_DATA);
+
+        if (customData == null) {
+            return false;
+        }
+
+        return customData.copyNbt()
+                .getBoolean(SPECIAL_ROD_TAG)
+                .orElse(false);
+    }
+
+    private static ServerWorld getServerWorld(ServerPlayerEntity player) {
+        return player.getEntityWorld();
+    }
+
+    private static MinecraftServer getServer(ServerPlayerEntity player) {
+        return getServerWorld(player).getServer();
+    }
+
+    private static void openSelectionChat(ServerPlayerEntity player) {
+
+        Set<UUID> selected =
+                SELECTIONS.computeIfAbsent(
+                        player.getUuid(),
+                        key -> ConcurrentHashMap.newKeySet());
+
+        for (ServerPlayerEntity target :
+                getServer(player).getPlayerManager().getPlayerList()) {
+
+            if (target.getUuid().equals(player.getUuid())) {
+                continue;
+            }
+
+            boolean isSelected = selected.contains(target.getUuid());
+
+            String prefix = isSelected ? "§a[✓] " : "§c[ ] ";
+
+            Text clickable = Text.literal(
+                            prefix + target.getName().getString() + " §7(Klicken)")
+                    .styled(style -> style.withClickEvent(
+                            new ClickEvent.RunCommand(
+                                    "/eptoggle " + target.getName().getString()
+                            )));
+
+            player.sendMessage(clickable, false);
+        }
+    }
+
+    private static void giveRod(ServerPlayerEntity player) {
+
+        Set<UUID> selected =
+                SELECTIONS.getOrDefault(player.getUuid(), Set.of());
+
+        String team = SELECTED_VEXBOT_TEAMS.get(player.getUuid());
+
+        if (selected.isEmpty() && (team == null || team.isBlank())) {
+            return;
+        }
+
+        ItemStack rod = new ItemStack(Items.FISHING_ROD);
+
+        // Ein Haltbarkeitspunkt bleibt übrig, damit sie beim Einziehen bricht.
+        rod.setDamage(rod.getMaxDamage() - 1);
+
+        // Eindeutige Markierung: normale Angeln lösen den Mod nicht aus.
+        NbtCompound nbt = new NbtCompound();
+        nbt.putBoolean(SPECIAL_ROD_TAG, true);
+        rod.set(DataComponentTypes.CUSTOM_DATA, NbtComponent.of(nbt));
+
+        if (!player.getInventory().insertStack(rod)) {
+            player.dropItem(rod, false);
+        }
+    }
+
+    private static void scheduleTeleport(ServerPlayerEntity owner) {
+
+        Set<UUID> selected =
+                SELECTIONS.getOrDefault(owner.getUuid(), Set.of());
+
+        String team = SELECTED_VEXBOT_TEAMS.get(owner.getUuid());
+
+        if (selected.isEmpty() && (team == null || team.isBlank())) {
+            return;
+        }
+
+        ServerWorld destinationWorld = getServerWorld(owner);
+
+        double x = owner.getX();
+        double y = owner.getY();
+        double z = owner.getZ();
+
+        float yaw = owner.getYaw();
+        float pitch = owner.getPitch();
+
+        List<ItemEntity> fallingPearls = new ArrayList<>();
+
+        // Enderperlen kommen von weit oben und fliegen schräg nach unten.
+        for (int i = 0; i < 12; i++) {
+
+            double angle = (Math.PI * 2.0 * i) / 12.0;
+
+            double pearlX = x + Math.cos(angle) * 3.0;
+            double pearlZ = z + Math.sin(angle) * 3.0;
+
+            ItemEntity pearl = new ItemEntity(
+                    destinationWorld,
+                    pearlX,
+                    y + 20.0,
+                    pearlZ,
+                    new ItemStack(Items.ENDER_PEARL)
+            );
+
+            pearl.setNoGravity(false);
+            pearl.setPickupDelay(32767);
+
+            pearl.setVelocity(
+                    -Math.cos(angle) * 0.08,
+                    -0.45,
+                    -Math.sin(angle) * 0.08
+            );
+
+            destinationWorld.spawnEntity(pearl);
+            fallingPearls.add(pearl);
+        }
+
+        PENDING_TELEPORTS.add(
+                new PendingTeleport(
+                        owner.getUuid(),
+                        destinationWorld,
+                        x, y, z,
+                        yaw, pitch,
+                        new HashSet<>(selected),
+                        team,
+                        fallingPearls
+                )
+        );
+    }
+
+    private static void tickPendingTeleports(MinecraftServer server) {
+
+        Iterator<PendingTeleport> iterator =
+                PENDING_TELEPORTS.iterator();
+
+        while (iterator.hasNext()) {
+
+            PendingTeleport pending = iterator.next();
+
+            pending.ticksRemaining--;
+
+            if (pending.ticksRemaining <= 0) {
+
+                // Sichtbare Enderperlen entfernen.
+                for (ItemEntity pearl : pending.fallingPearls) {
+                    pearl.discard();
+                }
+
+                executeTeleport(server, pending);
+
+                iterator.remove();
+            }
+        }
+    }
+
+    private static void executeTeleport(
+            MinecraftServer server,
+            PendingTeleport pending
+    ) {
+
+        ServerWorld destinationWorld = pending.destinationWorld;
+
+        double x = pending.x;
+        double y = pending.y;
+        double z = pending.z;
+
+        float yaw = pending.yaw;
+        float pitch = pending.pitch;
+
+        // Portal-Partikelkreis.
+        for (int i = 0; i < 24; i++) {
+
+            double angle = (Math.PI * 2.0 * i) / 24.0;
+
+            double px = x + Math.cos(angle) * 2.0;
+            double pz = z + Math.sin(angle) * 2.0;
+
+            destinationWorld.spawnParticles(
+                    ParticleTypes.PORTAL,
+                    px, y + 1.0, pz,
+                    8,
+                    0.12, 0.35, 0.12,
+                    0.02
+            );
+        }
+
+        // Ausgewählte Spieler teleportieren.
+        for (UUID id : pending.selectedPlayers) {
+
+            ServerPlayerEntity target =
+                    server.getPlayerManager().getPlayer(id);
+
+            if (target != null) {
+
+                target.teleport(
+                        destinationWorld,
+                        x, y, z,
+                        Set.of(),
+                        yaw,
+                        pitch,
+                        true
+                );
+            }
+        }
+
+        // VexBot-Team teleportieren.
+        if (pending.team != null && !pending.team.isBlank()) {
+
+            ServerPlayerEntity owner =
+                    server.getPlayerManager().getPlayer(pending.ownerId);
+
+            if (owner != null) {
+
+                String command = "vexbot team " + pending.team + " tp "
+                        + String.format(Locale.ROOT, "%.3f %.3f %.3f", x, y, z);
+
+                try {
+                    server.getCommandManager().parseAndExecute(
+                            owner.getCommandSource(),
+                            command
+                    );
+                } catch (Exception ignored) {
+                    // Keine Chat-Fehlermeldung ausgeben.
+                }
+            }
+        }
+
+        SELECTIONS.remove(pending.ownerId);
+        SELECTED_VEXBOT_TEAMS.remove(pending.ownerId);
+    }
+
+    private static class PendingTeleport {
+
+        private final UUID ownerId;
+        private final ServerWorld destinationWorld;
+
+        private final double x;
+        private final double y;
+        private final double z;
+
+        private final float yaw;
+        private final float pitch;
+
+        private final Set<UUID> selectedPlayers;
+        private final String team;
+        private final List<ItemEntity> fallingPearls;
+
+        private int ticksRemaining = TELEPORT_DELAY_TICKS;
+
+        private PendingTeleport(
+                UUID ownerId,
+                ServerWorld destinationWorld,
+                double x,
+                double y,
+                double z,
+                float yaw,
+                float pitch,
+                Set<UUID> selectedPlayers,
+                String team,
+                List<ItemEntity> fallingPearls
+        ) {
+            this.ownerId = ownerId;
+            this.destinationWorld = destinationWorld;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.yaw = yaw;
+            this.pitch = pitch;
+            this.selectedPlayers = selectedPlayers;
+            this.team = team;
+            this.fallingPearls = fallingPearls;
+        }
+    }
+}
