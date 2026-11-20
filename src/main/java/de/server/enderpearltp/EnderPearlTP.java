@@ -9,9 +9,12 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.command.permission.LeveledPermissionPredicate;
 import net.minecraft.command.permission.PermissionLevel;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.component.type.NbtComponent;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
@@ -40,14 +43,12 @@ public class EnderPearlTP implements ModInitializer {
     private static final Map<UUID, String> SELECTED_VEXBOT_TEAMS =
             new ConcurrentHashMap<>();
 
-    private static final Set<UUID> ARMED_RODS =
-            ConcurrentHashMap.newKeySet();
-
     private static final List<PendingTeleport> PENDING_TELEPORTS =
             new ArrayList<>();
 
-    // 30 Ticks = ungefähr 1,5 Sekunden.
     private static final int TELEPORT_DELAY_TICKS = 30;
+
+    private static final String SPECIAL_ROD_TAG = "EnderPearlTPSpecialRod";
 
     private static boolean isAllowed(ServerCommandSource source) {
         return source.getPlayer() != null
@@ -143,14 +144,13 @@ public class EnderPearlTP implements ModInitializer {
 
             ItemStack stack = serverPlayer.getStackInHand(hand);
 
-            if (!stack.isOf(Items.FISHING_ROD)
-                    || !ARMED_RODS.contains(serverPlayer.getUuid())) {
+            // Nur die speziell markierte Angel aktiviert die Funktion.
+            if (!isSpecialRod(stack)) {
                 return ActionResult.PASS;
             }
 
-            // Angel entfernen, auch im Creative-Modus.
+            // Spezielle Angel verbrauchen und zerstören.
             serverPlayer.setStackInHand(hand, ItemStack.EMPTY);
-            ARMED_RODS.remove(serverPlayer.getUuid());
 
             scheduleTeleport(serverPlayer);
 
@@ -160,6 +160,24 @@ public class EnderPearlTP implements ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register(
                 EnderPearlTP::tickPendingTeleports
         );
+    }
+
+    private static boolean isSpecialRod(ItemStack stack) {
+
+        if (!stack.isOf(Items.FISHING_ROD)) {
+            return false;
+        }
+
+        NbtComponent customData =
+                stack.get(DataComponentTypes.CUSTOM_DATA);
+
+        if (customData == null) {
+            return false;
+        }
+
+        NbtCompound nbt = customData.copyNbt();
+
+        return nbt.getBoolean(SPECIAL_ROD_TAG).orElse(false);
     }
 
     private static ServerWorld getServerWorld(ServerPlayerEntity player) {
@@ -212,11 +230,21 @@ public class EnderPearlTP implements ModInitializer {
 
         ItemStack rod = new ItemStack(Items.FISHING_ROD);
 
+        // Angel mit genau einem verbleibenden Haltbarkeitspunkt.
+        rod.setDamage(rod.getMaxDamage() - 1);
+
+        // Eigene Kennzeichnung, damit normale Angeln nicht funktionieren.
+        NbtCompound nbt = new NbtCompound();
+        nbt.putBoolean(SPECIAL_ROD_TAG, true);
+
+        rod.set(
+                DataComponentTypes.CUSTOM_DATA,
+                NbtComponent.of(nbt)
+        );
+
         if (!player.getInventory().insertStack(rod)) {
             player.dropItem(rod, false);
         }
-
-        ARMED_RODS.add(player.getUuid());
     }
 
     private static void scheduleTeleport(ServerPlayerEntity owner) {
@@ -296,7 +324,6 @@ public class EnderPearlTP implements ModInitializer {
 
             if (pending.ticksRemaining <= 0) {
 
-                // Sichtbare Enderperlen entfernen.
                 for (ItemEntity pearl : pending.fallingPearls) {
                     pearl.discard();
                 }
@@ -382,7 +409,6 @@ public class EnderPearlTP implements ModInitializer {
 
         SELECTIONS.remove(pending.ownerId);
         SELECTED_VEXBOT_TEAMS.remove(pending.ownerId);
-        ARMED_RODS.remove(pending.ownerId);
     }
 
     private static class PendingTeleport {
